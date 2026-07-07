@@ -1,1 +1,6 @@
-
+set_name,question_hi,question_en,option1_hi,option2_hi,option3_hi,option4_hi,option5_hi,option1_en,option2_en,option3_en,option4_en,option5_en,answer,difficulty_level,subject,duration_minutes,negative_marking,marks,solution_hi,solution_en
+Sample Test 1,भारत की राजधानी क्या है?,What is the capital of India?,दिल्ली,मुंबई,कोलकाता,चेन्नई,,Delhi,Mumbai,Kolkata,Chennai,,1,easy,General Knowledge,3,1,4,दिल्ली भारत की राजधानी है।,Delhi is the capital of India.
+Sample Test 1,भारत का राष्ट्रीय पक्षी कौन सा है?,What is the national bird of India?,मोर,तोता,कौआ,बाज़,,Peacock,Parrot,Crow,Eagle,,1,easy,General Knowledge,,,4,मोर भारत का राष्ट्रीय पक्षी है।,Peacock is the national bird of India.
+Sample Test 1,महात्मा गांधी का जन्म किस वर्ष हुआ था?,In which year was Mahatma Gandhi born?,1869,1885,1901,1947,,1869,1885,1901,1947,,1,medium,General Knowledge,,,4,महात्मा गांधी का जन्म 1869 में हुआ था।,Mahatma Gandhi was born in 1869.
+Sample Test 1,भारत की सबसे लंबी नदी कौन सी है?,Which is the longest river in India?,गंगा,यमुना,ब्रह्मपुत्र,गोदावरी,,Ganga,Yamuna,Brahmaputra,Godavari,,1,medium,General Knowledge,,,4,गंगा भारत की सबसे लंबी नदी है।,Ganga is the longest river in India.
+Sample Test 1,भारतीय संविधान कब लागू हुआ था?,When did the Indian Constitution come into effect?,26 जनवरी 1950,15 अगस्त 1947,26 नवंबर 1949,2 अक्टूबर 1950,,26 January 1950,15 August 1947,26 November 1949,2 October 1950,,1,hard,General Knowledge,,,4,भारतीय संविधान 26 जनवरी 1950 को लागू हुआ था।,The Indian Constitution came into effect on 26 January 1950.
