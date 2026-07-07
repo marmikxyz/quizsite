@@ -420,15 +420,31 @@ footer { position:relative; z-index:1; text-align:center; padding:2rem; color:va
 
     <div class="upload-zone" id="drop-zone">
       <div class="uz-icon">📂</div>
-      <h3>Quiz JSON Files Upload Karo</h3>
-      <p>Mock test ka <strong>.json</strong> file yahan drop karo ya click karo<br>
-      Multiple files ek saath select kar sakte ho</p>
-      <input type="file" id="file-input" accept=".json" multiple onchange="handleFiles(this.files)"/>
+      <h3>Quiz JSON ya CSV Files Upload Karo</h3>
+      <p>Mock test ka <strong>.json</strong> ya <strong>.csv</strong> (Testbook-style export) file yahan drop karo ya click karo<br>
+      Multiple files ek saath select kar sakte ho — CSV mein <code>set_name</code> column se test alag ho jaate hain</p>
+      <input type="file" id="file-input" accept=".json,.csv" multiple onchange="handleFiles(this.files)"/>
     </div>
+    <p style="color:var(--muted);font-size:.78rem;margin-top:.8rem;text-align:center;">
+      ⚠️ Yeh upload sirf <strong>is browser</strong> mein save hota hai (Save & Publish ke baad). Sabhi visitors ko dikhane ke liye neeche "Repo se Publish Karo" section dekho.
+    </p>
 
     <div class="uploaded-list">
-      <h3>📋 Uploaded Tests (<span id="item-count">0</span>)</h3>
+      <h3>📋 Uploaded Tests (<span id="item-count">0</span>) — this browser only</h3>
       <div id="items-list"></div>
+    </div>
+
+    <div class="uploaded-list" style="margin-top:2.5rem;padding-top:1.5rem;border-top:1px solid var(--border);">
+      <h3>🌐 Published From Repo (<span id="repo-item-count">0</span>) — visible to everyone</h3>
+      <p style="color:var(--muted);font-size:.8rem;line-height:1.7;margin-bottom:1rem;">
+        In tests ko <strong>sabhi visitors</strong> dekh sakte hain, kyunki ye tumhare GitHub repo ke
+        <code>quizzes/</code> folder se load hote hain — koi login ya browser-specific save nahi lagta.<br>
+        Naya test add karne ke liye: <strong>1)</strong> apni CSV/JSON file <code>quizzes/</code> folder mein daalo,
+        <strong>2)</strong> uska filename <code>quizzes/manifest.json</code> list mein add karo, <strong>3)</strong> GitHub par push/commit karo.
+        Site apne aap naya test dikhane lagegi.
+      </p>
+      <div id="repo-items-list"></div>
+      <button class="btn-export" style="margin-top:.8rem;" onclick="refreshRepoQuizzes()">🔄 Refresh From Repo</button>
     </div>
   </div>
 </div>
@@ -460,7 +476,15 @@ const STORAGE_KEY = 'ranaji_quizzes_v1';
 const SCORES_KEY  = 'ranaji_quiz_scores_v1';
 const ADMIN_PASSWORD = 'ranaji123'; // 👈 change this to your own admin password
 let quizzes = [];
+let repoQuizzes = []; // quizzes auto-loaded from /quizzes/manifest.json in the repo (visible to ALL visitors)
 let scores  = {}; // quiz_id -> { best: %, attempts: n }
+
+function getAllQuizzes() {
+  const map = new Map();
+  quizzes.forEach(q => map.set(q.quiz_id, q));
+  repoQuizzes.forEach(q => map.set(q.quiz_id, { ...q, source: 'repo' })); // repo copy wins on id clash
+  return Array.from(map.values());
+}
 
 // Active attempt state
 let attempt = null; // { quiz, answers:[], idx, secondsLeft, timerId, submitted }
@@ -477,6 +501,115 @@ function loadQuizzes() {
 }
 function saveQuizzes() { localStorage.setItem(STORAGE_KEY, JSON.stringify(quizzes)); }
 function saveScores()  { localStorage.setItem(SCORES_KEY, JSON.stringify(scores)); }
+
+// ──────────────────────────────
+// CSV SUPPORT (Testbook-style export: question_hi/en, option1-5_hi/en, answer, set_name, difficulty_level)
+// ──────────────────────────────
+function parseCSV(text) {
+  text = text.replace(/^\uFEFF/, ''); // strip BOM
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i], next = text[i+1];
+    if (inQuotes) {
+      if (c === '"' && next === '"') { field += '"'; i++; }
+      else if (c === '"') { inQuotes = false; }
+      else { field += c; }
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\r') { /* ignore, \n handles line breaks */ }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else field += c;
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  if (rows.length === 0) return [];
+  const headers = rows[0].map(h => h.trim());
+  return rows.slice(1)
+    .filter(r => r.some(cell => cell && cell.trim() !== ''))
+    .map(r => {
+      const obj = {};
+      headers.forEach((h, idx) => obj[h] = (r[idx] !== undefined ? r[idx] : '').trim());
+      return obj;
+    });
+}
+
+function hashId(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+// Groups CSV rows by set_name -> one quiz per set, bilingual hi/en fields preserved
+function csvRowsToQuizzes(rows) {
+  const groups = {};
+  rows.forEach(r => {
+    const setName = (r.set_name || 'Untitled Test').trim();
+    (groups[setName] = groups[setName] || []).push(r);
+  });
+  return Object.keys(groups).map(setName => {
+    const rowsInSet = groups[setName];
+    const questions = rowsInSet.map(r => {
+      const optsHi = [r.option1_hi, r.option2_hi, r.option3_hi, r.option4_hi, r.option5_hi].filter(o => o && o.trim());
+      const optsEn = [r.option1_en, r.option2_en, r.option3_en, r.option4_en, r.option5_en].filter(o => o && o.trim());
+      const answerIdx = parseInt(r.answer, 10) - 1;
+      return {
+        q: r.question_hi || r.question_en || '',
+        q_en: (r.question_hi && r.question_en) ? r.question_en : '',
+        options: optsHi.length ? optsHi : optsEn,
+        options_en: optsHi.length ? optsEn : [],
+        answer: Number.isNaN(answerIdx) ? 0 : answerIdx,
+        marks: 1,
+        solution: r.solution_hi || '',
+        solution_en: r.solution_en || ''
+      };
+    });
+    const rawDifficulty = (rowsInSet[0].difficulty_level || '').toLowerCase().trim();
+    const difficulty = ['easy','medium','hard'].includes(rawDifficulty) ? rawDifficulty : 'medium';
+    return {
+      quiz_id: hashId(setName),
+      title: setName,
+      subject: 'General Studies',
+      difficulty,
+      duration_minutes: Math.max(20, Math.round(questions.length * 0.9)),
+      negative_marking: 0.25,
+      bilingual: true,
+      questions
+    };
+  });
+}
+
+// ──────────────────────────────
+// REPO AUTO-LOAD (put files in /quizzes/ + list them in /quizzes/manifest.json — visible to ALL visitors, no admin login needed)
+// ──────────────────────────────
+async function loadRepoQuizzes() {
+  try {
+    const res = await fetch('quizzes/manifest.json', { cache: 'no-store' });
+    if (!res.ok) { repoQuizzes = []; return; }
+    const manifest = await res.json(); // e.g. ["bihar-police-test-1.json", "gk-mock-2.csv"]
+    const loaded = [];
+    for (const filename of manifest) {
+      try {
+        const fres = await fetch('quizzes/' + filename, { cache: 'no-store' });
+        if (!fres.ok) continue;
+        if (filename.toLowerCase().endsWith('.csv')) {
+          const rows = parseCSV(await fres.text());
+          loaded.push(...csvRowsToQuizzes(rows));
+        } else {
+          const data = await fres.json();
+          loaded.push(...(Array.isArray(data) ? data : [data]));
+        }
+      } catch (e) { console.warn('Could not load repo quiz file:', filename, e); }
+    }
+    repoQuizzes = loaded;
+  } catch (e) {
+    repoQuizzes = []; // manifest missing, or running from file:// without a server — fail silently
+  }
+}
 
 // ──────────────────────────────
 // ROUTING
@@ -528,6 +661,7 @@ function showAdminPanel() {
   document.getElementById('admin').style.display = 'block';
   document.getElementById('save-bar').style.display = 'flex';
   renderAdminList();
+  renderRepoAdminList();
 }
 function lockAdmin() {
   sessionStorage.removeItem('ranaji_admin_unlocked');
@@ -540,9 +674,10 @@ function lockAdmin() {
 function renderGrid() {
   const container = document.getElementById('grid-container');
   const badge = document.getElementById('count-badge');
-  badge.textContent = `${quizzes.length} test${quizzes.length !== 1 ? 's' : ''}`;
+  const all = getAllQuizzes();
+  badge.textContent = `${all.length} test${all.length !== 1 ? 's' : ''}`;
 
-  if (quizzes.length === 0) {
+  if (all.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
         <div class="icon">📭</div>
@@ -555,7 +690,7 @@ function renderGrid() {
 
   const searchInput = document.getElementById('search-input');
   const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
-  let filtered = [...quizzes];
+  let filtered = [...all];
   if (query) {
     filtered = filtered.filter(q => {
       const haystack = `${q.title||''} ${q.subject||''} ${q.difficulty||''}`.toLowerCase();
@@ -594,6 +729,7 @@ function cardHTML(q) {
       <div class="card-thumb">
         ${thumb}
         <span class="card-type-badge ${difficultyBadge(q.difficulty)}">${q.difficulty || 'medium'}</span>
+        ${q.source === 'repo' ? `<span class="badge-score" style="left:.5rem;right:auto;top:2.1rem;">🌐 Repo</span>` : ''}
         ${s ? `<span class="badge-score">Best ${s.best}%</span>` : ''}
         <div class="play-btn">START TEST</div>
       </div>
@@ -612,7 +748,7 @@ function cardHTML(q) {
 // MODAL — INTRO / RESULT (video/pdf equivalent)
 // ──────────────────────────────
 function openModal(quizId) {
-  const q = quizzes.find(x => x.quiz_id === quizId);
+  const q = getAllQuizzes().find(x => x.quiz_id === quizId);
   if (!q) return;
   showIntro(q);
   document.getElementById('modal').classList.add('open');
@@ -625,7 +761,7 @@ function showIntro(q) {
   const totalMarks = (q.questions || []).reduce((sum,x) => sum + (x.marks || 1), 0);
 
   if (!q.questions || q.questions.length === 0) {
-    document.getElementById('modal-body').innerHTML = `<div class="media-error"><p>❌ Is test mein koi question nahi mila. Admin panel se dobara JSON check karo.</p></div>`;
+    document.getElementById('modal-body').innerHTML = `<div class="media-error"><p>❌ Is test mein koi question nahi mila. Admin panel se dobara JSON/CSV check karo.</p></div>`;
     return;
   }
 
@@ -683,7 +819,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModalDi
 // TEST TAKING
 // ──────────────────────────────
 function startTest(quizId) {
-  const q = quizzes.find(x => x.quiz_id === quizId);
+  const q = getAllQuizzes().find(x => x.quiz_id === quizId);
   if (!q) return;
   attempt = {
     quiz: q,
@@ -735,10 +871,14 @@ function renderQuestion() {
 
   const options = question.options.map((opt, oIdx) => {
     const selected = attempt.answers[i] === oIdx;
+    const optEn = question.options_en && question.options_en[oIdx];
     return `
       <div class="option ${selected ? 'selected' : ''}" onclick="selectOption(${oIdx})">
         <div class="opt-letter">${String.fromCharCode(65+oIdx)}</div>
-        <div>${escHtml(opt)}</div>
+        <div>
+          <div>${escHtml(opt)}</div>
+          ${optEn ? `<div style="font-size:.78rem;color:var(--muted);margin-top:2px;">${escHtml(optEn)}</div>` : ''}
+        </div>
       </div>`;
   }).join('');
 
@@ -753,6 +893,7 @@ function renderQuestion() {
     <div class="q-nav">${navDots}</div>
     <div class="q-card">
       <div class="q-text">${escHtml(question.q)}</div>
+      ${question.q_en ? `<div style="font-size:.85rem;color:var(--muted);margin:-.8rem 0 1.2rem;">${escHtml(question.q_en)}</div>` : ''}
       ${options}
       <div class="q-actions">
         <button class="btn-nav" onclick="prevQuestion()" ${i===0?'disabled':''}>← Prev</button>
@@ -817,10 +958,16 @@ function renderResult(r) {
       else if (oIdx === given) cls = 'wrong';
       return `<div class="review-opt ${cls}">${escHtml(String.fromCharCode(65+oIdx) + '. ' + opt)}${oIdx===question.answer?' ✓':''}${oIdx===given && given!==question.answer?' ✗ (tumhara jawab)':''}</div>`;
     }).join('');
+    const solutionText = question.solution || question.solution_en || '';
+    const solutionHTML = solutionText
+      ? `<div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.8rem;color:var(--muted);line-height:1.6;">💡 ${escHtml(solutionText)}</div>`
+      : '';
     return `
       <div class="review-item">
         <div class="q-text">${i+1}. ${escHtml(question.q)}</div>
+        ${question.q_en ? `<div style="font-size:.78rem;color:var(--muted);margin:-.4rem 0 .6rem;">${escHtml(question.q_en)}</div>` : ''}
         ${optsHTML}
+        ${solutionHTML}
       </div>`;
   }).join('');
 
@@ -899,6 +1046,34 @@ function deleteQuiz(quizId) {
   showToast('Test remove hua!');
 }
 
+function renderRepoAdminList() {
+  document.getElementById('repo-item-count').textContent = repoQuizzes.length;
+  const list = document.getElementById('repo-items-list');
+  if (repoQuizzes.length === 0) {
+    list.innerHTML = `<div style="color:var(--muted);font-size:.85rem;padding:1rem 0;">
+      Abhi koi repo test nahi mila. <code>quizzes/manifest.json</code> banao aur us mein filenames add karo.</div>`;
+    return;
+  }
+  list.innerHTML = repoQuizzes.map(q => {
+    const title = q.title || `Mock Test #${q.quiz_id}`;
+    return `
+      <div class="json-item">
+        <div class="ji-icon ji-easy">🌐</div>
+        <div class="ji-info">
+          <div class="ji-title" title="${escHtml(title)}">${escHtml(title.substring(0,80))}</div>
+          <div class="ji-sub">#${q.quiz_id} • ${(q.questions||[]).length} Qs • ${q.subject||'?'}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function refreshRepoQuizzes() {
+  showToast('🔄 Repo se refresh ho raha hai...');
+  await loadRepoQuizzes();
+  renderRepoAdminList();
+  showToast(`✅ ${repoQuizzes.length} repo test(s) mile`);
+}
+
 // ──────────────────────────────
 // FILE HANDLING
 // ──────────────────────────────
@@ -915,12 +1090,20 @@ function handleFiles(files) {
   let count = 0;
   const fileArr = Array.from(files);
   fileArr.forEach(file => {
-    if (!file.name.endsWith('.json')) return;
+    const lower = file.name.toLowerCase();
+    const isJSON = lower.endsWith('.json');
+    const isCSV = lower.endsWith('.csv');
+    if (!isJSON && !isCSV) return;
     const reader = new FileReader();
     reader.onload = e => {
       try {
-        const data = JSON.parse(e.target.result);
-        const items = Array.isArray(data) ? data : [data];
+        let items = [];
+        if (isJSON) {
+          const data = JSON.parse(e.target.result);
+          items = Array.isArray(data) ? data : [data];
+        } else {
+          items = csvRowsToQuizzes(parseCSV(e.target.result));
+        }
         items.forEach(item => {
           if (!item.quiz_id || !Array.isArray(item.questions)) return;
           quizzes = quizzes.filter(q => q.quiz_id !== item.quiz_id);
@@ -929,8 +1112,9 @@ function handleFiles(files) {
         });
         renderAdminList();
         showToast(`✅ ${count} test(s) load hua!`);
-      } catch {
-        showToast('❌ Invalid JSON file');
+      } catch (err) {
+        console.error(err);
+        showToast('❌ Invalid file — JSON ya CSV format check karo');
       }
     };
     reader.readAsText(file);
@@ -969,8 +1153,12 @@ function escHtml(str) {
 // ──────────────────────────────
 // INIT
 // ──────────────────────────────
-loadQuizzes();
-renderRoute();
+async function init() {
+  loadQuizzes();
+  await loadRepoQuizzes();
+  renderRoute();
+}
+init();
 </script>
 </body>
 </html>
