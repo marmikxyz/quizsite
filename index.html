@@ -546,43 +546,45 @@ function hashId(str) {
 
 // Groups CSV rows by set_name -> one quiz per set, bilingual hi/en fields preserved
 function csvRowsToQuizzes(rows) {
-  const groups = {};
-  rows.forEach(r => {
-    const setName = (r.set_name || 'Untitled Test').trim();
-    (groups[setName] = groups[setName] || []).push(r);
-  });
-  return Object.keys(groups).map(setName => {
-    const rowsInSet = groups[setName];
-    const questions = rowsInSet.map(r => {
-      const optsHi = [r.option1_hi, r.option2_hi, r.option3_hi, r.option4_hi, r.option5_hi].filter(o => o && o.trim());
-      const optsEn = [r.option1_en, r.option2_en, r.option3_en, r.option4_en, r.option5_en].filter(o => o && o.trim());
-      const answerIdx = parseInt(r.answer, 10) - 1;
-      return {
-        q: r.question_hi || r.question_en || '',
-        q_en: (r.question_hi && r.question_en) ? r.question_en : '',
-        options: optsHi.length ? optsHi : optsEn,
-        options_en: optsHi.length ? optsEn : [],
-        answer: Number.isNaN(answerIdx) ? 0 : answerIdx,
-        marks: 1,
-        solution: r.solution_hi || '',
-        solution_en: r.solution_en || ''
-      };
-    });
-    const rawDifficulty = (rowsInSet[0].difficulty_level || '').toLowerCase().trim();
-    const difficulty = ['easy','medium','hard'].includes(rawDifficulty) ? rawDifficulty : 'medium';
-    return {
-      quiz_id: hashId(setName),
-      title: setName,
-      subject: 'General Studies',
-      difficulty,
-      duration_minutes: Math.max(20, Math.round(questions.length * 0.9)),
-      negative_marking: 0.25,
-      bilingual: true,
-      questions
-    };
-  });
+const groups = {};
+rows.forEach(r => {
+const setName = (r.set_name || 'Untitled Test').trim();
+(groups[setName] = groups[setName] || []).push(r);
+});
+return Object.keys(groups).map(setName => {
+const rowsInSet = groups[setName];
+const questions = rowsInSet.map(r => {
+const optsHi = [r.option1_hi, r.option2_hi, r.option3_hi, r.option4_hi, r.option5_hi].filter(o => o && o.trim());
+const optsEn = [r.option1_en, r.option2_en, r.option3_en, r.option4_en, r.option5_en].filter(o => o && o.trim());
+const answerIdx = parseInt(r.answer, 10) - 1;
+const marks = parseFloat(r.marks);
+return {
+q: r.question_hi || r.question_en || '',
+q_en: (r.question_hi && r.question_en) ? r.question_en : '',
+options: optsHi.length ? optsHi : optsEn,
+options_en: optsHi.length ? optsEn : [],
+answer: Number.isNaN(answerIdx) ? 0 : answerIdx,
+marks: Number.isNaN(marks) ? 1 : marks,
+solution: r.solution_hi || '',
+solution_en: r.solution_en || ''
+};
+});
+const rawDifficulty = (rowsInSet[0].difficulty_level || '').toLowerCase().trim();
+const difficulty = ['easy','medium','hard'].includes(rawDifficulty) ? rawDifficulty : 'medium';
+const csvDuration = parseInt(rowsInSet[0].duration_minutes, 10);
+const csvNegMark = parseFloat(rowsInSet[0].negative_marking);
+return {
+quiz_id: hashId(setName),
+title: setName,
+subject: rowsInSet[0].subject || 'General Studies',
+difficulty,
+duration_minutes: Number.isNaN(csvDuration) ? Math.max(20, Math.round(questions.length * 0.9)) : csvDuration,
+negative_marking: Number.isNaN(csvNegMark) ? 0.25 : csvNegMark,
+bilingual: true,
+questions
+};
+});
 }
-
 // ──────────────────────────────
 // REPO AUTO-LOAD (put files in /quizzes/ + list them in /quizzes/manifest.json — visible to ALL visitors, no admin login needed)
 // ──────────────────────────────
@@ -779,22 +781,42 @@ function showIntro(q) {
         <div class="rstat"><b>${totalMarks}</b>Marks</div>
       </div>
       ${s ? `<p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem;">Best score so far: <strong style="color:var(--gold);">${s.best}%</strong> (${s.attempts} attempt${s.attempts>1?'s':''})</p>` : ''}
-      <button class="btn-tg" style="background:var(--accent);" onclick="startTest(${q.quiz_id})">▶️ Start Test</button>
-    </div>`;
+<div style="display:flex;gap:.6rem;justify-content:center;margin-bottom:1.2rem;">
+  <button class="fs-toggle" id="lang-btn-hi" onclick="setQuizLang('hi')">🇮🇳 हिंदी</button>
+  <button class="fs-toggle" id="lang-btn-en" onclick="setQuizLang('en')">🇬🇧 English</button>
+</div>
+<button class="btn-tg" style="background:var(--accent);" onclick="startTest(${q.quiz_id})">▶️ Start Test</button>
+</div>`;
+setTimeout(() => setQuizLang(quizLang), 0);
+}
+
+let quizLang = localStorage.getItem('ranaji_quiz_lang') || 'hi';
+
+function setQuizLang(lang) {
+  quizLang = lang;
+  localStorage.setItem('ranaji_quiz_lang', lang);
+  const hiBtn = document.getElementById('lang-btn-hi');
+  const enBtn = document.getElementById('lang-btn-en');
+  if (hiBtn && enBtn) {
+    hiBtn.style.borderColor = lang === 'hi' ? 'var(--blue)' : '';
+    hiBtn.style.color = lang === 'hi' ? '#fff' : '';
+    enBtn.style.borderColor = lang === 'en' ? 'var(--blue)' : '';
+    enBtn.style.color = lang === 'en' ? '#fff' : '';
+  }
 }
 
 function closeModal(e) { if (e.target === document.getElementById('modal')) closeModalDirect(); }
 function closeModalDirect() {
-  if (attempt && !attempt.submitted) {
-    if (!confirm('Test abhi submit nahi hua hai. Band karoge toh progress save nahi hogi. Pakka?')) return;
-  }
-  stopTimer();
-  exitFullscreen();
-  attempt = null;
-  document.getElementById('modal').classList.remove('open');
-  document.body.style.overflow = '';
+if (attempt && !attempt.submitted) {
+if (!confirm('Test abhi submit nahi hua hai. Band karoge toh progress save nahi hogi. Pakka?')) return;
 }
-
+stopTimer();
+exitFullscreen();
+resetFontScale();
+attempt = null;
+document.getElementById('modal').classList.remove('open');
+document.body.style.overflow = '';
+}
 // ──────────────────────────────
 // FULLSCREEN
 // ──────────────────────────────
@@ -869,41 +891,58 @@ function renderQuestion() {
     return `<div class="${cls.join(' ')}" onclick="jumpTo(${idx})">${idx+1}</div>`;
   }).join('');
 
-  const options = question.options.map((opt, oIdx) => {
-    const selected = attempt.answers[i] === oIdx;
-    const optEn = question.options_en && question.options_en[oIdx];
-    return `
-      <div class="option ${selected ? 'selected' : ''}" onclick="selectOption(${oIdx})">
-        <div class="opt-letter">${String.fromCharCode(65+oIdx)}</div>
-        <div>
-          <div>${escHtml(opt)}</div>
-          ${optEn ? `<div style="font-size:.78rem;color:var(--muted);margin-top:2px;">${escHtml(optEn)}</div>` : ''}
-        </div>
-      </div>`;
-  }).join('');
+  const useEn = quizLang === 'en' && question.q_en;
+const mainQ = useEn ? question.q_en : question.q;
+const subQ = useEn ? question.q : question.q_en;
 
-  document.getElementById('modal-body').innerHTML = `
-    <div class="test-topbar">
-      <div class="q-progress" style="margin:0;">Question ${i+1} / ${total}</div>
-      <div style="display:flex;gap:.6rem;align-items:center;">
-        <button class="fs-toggle" onclick="toggleFullscreen()">⛶ Fullscreen</button>
-        <div class="timer" id="timer-display">⏱ --:--</div>
-      </div>
-    </div>
-    <div class="q-nav">${navDots}</div>
-    <div class="q-card">
-      <div class="q-text">${escHtml(question.q)}</div>
-      ${question.q_en ? `<div style="font-size:.85rem;color:var(--muted);margin:-.8rem 0 1.2rem;">${escHtml(question.q_en)}</div>` : ''}
-      ${options}
-      <div class="q-actions">
-        <button class="btn-nav" onclick="prevQuestion()" ${i===0?'disabled':''}>← Prev</button>
-        ${i === total-1
-          ? `<button class="btn-submit-test" onclick="confirmSubmit()">✅ Submit Test</button>`
-          : `<button class="btn-nav" onclick="nextQuestion()">Next →</button>`}
-      </div>
-    </div>`;
-  updateTimerDisplay();
+const options = question.options.map((opt, oIdx) => {
+const selected = attempt.answers[i] === oIdx;
+const optEn = question.options_en && question.options_en[oIdx];
+const mainOpt = (useEn && optEn) ? optEn : opt;
+const subOpt = (useEn && optEn) ? opt : optEn;
+return `
+<div class="option ${selected ? 'selected' : ''}" onclick="selectOption(${oIdx})">
+<div class="opt-letter">${String.fromCharCode(65+oIdx)}</div>
+<div>
+<div>${escHtml(mainOpt)}</div>
+${subOpt ? `<div style="font-size:.78rem;color:var(--muted);margin-top:2px;">${escHtml(subOpt)}</div>` : ''}
+</div>
+</div>`;
+}).join('');
+
+document.getElementById('modal-body').innerHTML = `
+<div class="test-topbar">
+<div class="q-progress" style="margin:0;">Question ${i+1} / ${total}</div>
+<div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;">
+<button class="fs-toggle" onclick="zoomOut()" title="Font chota karo">A−</button>
+<button class="fs-toggle" onclick="zoomIn()" title="Font bada karo">A+</button>
+<button class="fs-toggle" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+<div class="timer" id="timer-display">⏱ --:--</div>
+</div>
+</div>
+<div class="q-nav">${navDots}</div>
+<div class="q-card">
+<div class="q-text">${escHtml(mainQ)}</div>
+${subQ ? `<div style="font-size:.85rem;color:var(--muted);margin:-.8rem 0 1.2rem;">${escHtml(subQ)}</div>` : ''}
+${options}
+<div class="q-actions">
+<button class="btn-nav" onclick="prevQuestion()" ${i===0?'disabled':''}>← Prev</button>
+${i === total-1
+? `<button class="btn-submit-test" onclick="confirmSubmit()">✅ Submit Test</button>`
+: `<button class="btn-nav" onclick="nextQuestion()">Next →</button>`}
+</div>
+</div>`;
+updateTimerDisplay();
 }
+
+let quizFontScale = 1;
+function setFontScale(scale) {
+quizFontScale = Math.min(1.6, Math.max(0.7, scale));
+document.documentElement.style.fontSize = (16 * quizFontScale) + 'px';
+}
+function zoomIn() { setFontScale(quizFontScale + 0.1); }
+function zoomOut() { setFontScale(quizFontScale - 0.1); }
+function resetFontScale() { quizFontScale = 1; document.documentElement.style.fontSize = ''; }
 
 function selectOption(oIdx) {
   attempt.answers[attempt.idx] = oIdx;
